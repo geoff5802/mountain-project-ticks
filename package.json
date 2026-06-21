@@ -1,0 +1,14 @@
+{
+  "name": "mountain-tick-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local catalog of Mountain Project routes for an area, with recently-climbed indicators derived from tick data.",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "crawl": "node --disable-warning=ExperimentalWarning src/crawl.js",
+    "serve": "node --disable-warning=ExperimentalWarning src/server.js"
+  }
+}
