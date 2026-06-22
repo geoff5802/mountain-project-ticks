@@ -34,7 +34,29 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(config.port, () => {
-  console.log(`Catalog for ${config.areaName} → http://localhost:${config.port}`);
+// Logged once, on the single successful bind — reads the actual port so a
+// fallback (below) is reported correctly.
+server.on('listening', () => {
+  const { port } = server.address();
+  console.log(`Catalog for ${config.areaName} → http://localhost:${port}`);
   console.log(`(DB: ${config.dbPath}; run "npm run crawl" to refresh data)`);
 });
+
+// Bind the configured port, falling back to the next few ports if it's taken
+// (common locally when a previous server is still running).
+function start(port, attemptsLeft) {
+  server.once('error', (err) => {
+    if (err.code === 'EADDRINUSE' && attemptsLeft > 0) {
+      console.warn(`Port ${port} is in use — trying ${port + 1}…`);
+      start(port + 1, attemptsLeft - 1);
+    } else if (err.code === 'EADDRINUSE') {
+      console.error(`No free port found near ${config.port}. Is the catalog already running? Set PORT=<n> and retry.`);
+      process.exit(1);
+    } else {
+      console.error('Server error:', err);
+      process.exit(1);
+    }
+  });
+  server.listen(port);
+}
+start(config.port, 10);
