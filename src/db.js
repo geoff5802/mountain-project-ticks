@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS routes (
   length_ft     INTEGER,
   area_lat      REAL,
   area_lng      REAL,
+  tick_total    INTEGER,
   first_seen_at TEXT    NOT NULL,
   last_seen_at  TEXT    NOT NULL,
   raw           TEXT
@@ -59,5 +60,10 @@ export function openDb(dbPath) {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
+  // Lightweight migration: add tick_total to DBs created before it existed.
+  const routeCols = db.prepare('PRAGMA table_info(routes)').all().map((c) => c.name);
+  if (!routeCols.includes('tick_total')) {
+    db.exec('ALTER TABLE routes ADD COLUMN tick_total INTEGER');
+  }
   return db;
 }

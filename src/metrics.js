@@ -16,7 +16,7 @@ export function getRouteRows(db) {
               AND t.climbed_date BETWEEN date('now','localtime','-1 day') AND date('now','localtime')) AS climbed_recent,
            (SELECT COUNT(*) FROM ticks t WHERE t.route_mp_id = r.mp_id
               AND t.climbed_date BETWEEN date('now','localtime','-6 days') AND date('now','localtime')) AS climbed_week,
-           (SELECT COUNT(*) FROM ticks t WHERE t.route_mp_id = r.mp_id) AS total_ticks
+           COALESCE(r.tick_total, (SELECT COUNT(*) FROM ticks t WHERE t.route_mp_id = r.mp_id)) AS all_time
     FROM routes r
     ORDER BY r.name COLLATE NOCASE
   `).all();
