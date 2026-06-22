@@ -108,10 +108,14 @@ async function main() {
     return;
   }
 
+  const setTotal = db.prepare('UPDATE routes SET tick_total = ? WHERE mp_id = ?');
   for (let i = 0; i < routes.length; i++) {
     const route = routes[i];
     try {
       const { total } = await ingestTicksForRoute(db, route, counters);
+      // The API's `total` is the authoritative all-time count; persist it so the
+      // UI's "All-time" column isn't limited to the page-1 sample we store.
+      if (total != null) setTotal.run(total, route.mpId);
       if ((i + 1) % 20 === 0 || i === routes.length - 1) {
         console.log(`[crawl] ticks ${i + 1}/${routes.length} (last: ${route.name}, all-time ${total ?? '?'})`);
       }

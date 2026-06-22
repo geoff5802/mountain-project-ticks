@@ -8,7 +8,7 @@ const esc = (s) =>
 
 // Escape `<` so a literal "</script>" inside any tick text can't close the
 // embedded JSON <script> block early.
-const jsonForScript = (obj) => JSON.stringify(obj).replace(/</g, '\u003c');
+const jsonForScript = (obj) => JSON.stringify(obj).replace(/</g, '\\u003c');
 
 export function renderPage({ routes, ticksByRoute, lastCrawl }) {
   const updated = lastCrawl?.finished_at
@@ -85,7 +85,7 @@ const COLS = [
   { key: 'last_climbed',  label: 'Last climbed', type: 'text' },
   { key: 'climbed_recent',label: 'Past day~', type: 'num'  },
   { key: 'climbed_week',  label: 'This week', type: 'num'  },
-  { key: 'total_ticks',   label: 'All-time',  type: 'num'  },
+  { key: 'all_time',      label: 'All-time',  type: 'num'  },
 ];
 
 let sortKey = 'climbed_week', sortDir = -1;

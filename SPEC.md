@@ -1,6 +1,7 @@
 # Mountain Project Tick Catalog — Spec
 
-> Status: **DRAFT for review** (no code yet). Last updated: 2026-06-21.
+> Status: **v1 implemented** — working local app in this repo (see `README.md` and `src/`).
+> Last updated: 2026-06-22.
 > Personal-use, access-gated catalog of climbing routes for a configurable Mountain
 > Project (MP) area, augmented with "recently climbed" signals derived from tick data.
 
