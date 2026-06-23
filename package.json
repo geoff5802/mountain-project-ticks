@@ -10,5 +10,8 @@
   "scripts": {
     "crawl": "node --disable-warning=ExperimentalWarning src/crawl.js",
     "serve": "node --disable-warning=ExperimentalWarning src/server.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4"
   }
 }

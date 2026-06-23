@@ -1,31 +1,23 @@
-// Tiny local web server for the catalog. Reads the SQLite DB and renders the
+// Local dev web server for the catalog. Reads the libSQL DB and renders the
 // table. Run with: npm run serve  (then open the printed URL)
 import http from 'node:http';
 import { config } from './config.js';
-import { openDb } from './db.js';
+import { getClient, migrate } from './db.js';
 import { getRouteRows, getRecentTicksByRoute, getLastCrawl } from './metrics.js';
 import { renderPage } from './render.js';
 
-const db = openDb(config.dbPath);
+const client = getClient();
+await migrate(client);
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const path = req.url.split('?')[0];
-  if (path === '/favicon.ico') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-  if (path !== '/') {
-    res.writeHead(404, { 'content-type': 'text/plain' });
-    res.end('Not found');
-    return;
-  }
+  if (path === '/favicon.ico') { res.writeHead(204); res.end(); return; }
+  if (path !== '/') { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('Not found'); return; }
   try {
-    const html = renderPage({
-      routes: getRouteRows(db),
-      ticksByRoute: getRecentTicksByRoute(db),
-      lastCrawl: getLastCrawl(db),
-    });
+    const [routes, ticksByRoute, lastCrawl] = await Promise.all([
+      getRouteRows(client), getRecentTicksByRoute(client), getLastCrawl(client),
+    ]);
+    const html = renderPage({ areas: config.areas, routes, ticksByRoute, lastCrawl });
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(html);
   } catch (err) {
@@ -34,16 +26,14 @@ const server = http.createServer((req, res) => {
   }
 });
 
-// Logged once, on the single successful bind — reads the actual port so a
-// fallback (below) is reported correctly.
+// Logged once on the successful bind (reports the real port after any fallback).
 server.on('listening', () => {
   const { port } = server.address();
-  console.log(`Catalog for ${config.areaName} → http://localhost:${port}`);
-  console.log(`(DB: ${config.dbPath}; run "npm run crawl" to refresh data)`);
+  console.log(`Tick Catalog → http://localhost:${port}`);
+  console.log(`(DB: ${config.dbUrl}; run "npm run crawl" to refresh data)`);
 });
 
-// Bind the configured port, falling back to the next few ports if it's taken
-// (common locally when a previous server is still running).
+// Bind the configured port, falling back to the next few if it's taken.
 function start(port, attemptsLeft) {
   server.once('error', (err) => {
     if (err.code === 'EADDRINUSE' && attemptsLeft > 0) {

@@ -50,8 +50,8 @@ function buildQuery(params) {
     .join('&');
 }
 
-export async function fetchCatalogCsv() {
-  const params = { selectedIds: config.areaId, ...config.finderParams };
+export async function fetchCatalogCsv(areaId) {
+  const params = { selectedIds: areaId, ...config.finderParams };
   const url = `${MP_BASE}/route-finder-export?${buildQuery(params)}`;
   return request(url, { json: false });
 }

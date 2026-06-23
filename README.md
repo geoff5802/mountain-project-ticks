@@ -1,8 +1,8 @@
 # Mountain Project Tick Catalog
 
-A local, zero-dependency tool that catalogs every climbing route in a Mountain Project
-area and shows **what's getting climbed right now** — derived from crowd-sourced "tick"
-data (a tick = a logged ascent, often with a comment).
+A tool that catalogs every climbing route across one or more Mountain Project areas and
+shows **what's getting climbed right now** — derived from crowd-sourced "tick" data
+(a tick = a logged ascent, often with a comment).
 
 It answers questions a static guidebook can't:
 
@@ -10,16 +10,20 @@ It answers questions a static guidebook can't:
 - *When was this route last climbed?*
 - *What are people saying about conditions?* (e.g. *"very wet"*, *"hot temps, hard 5.7"*)
 
-Default area: **Cathedral Ledge, NH** (`105908823`). The area is a one-line config change,
-so the same tool works for any Mountain Project area.
+Areas are configured in `src/config.js` and shown as **tabs** in the UI. Ships with
+**Cathedral Ledge** and **Whitehorse Ledge** (NH); adding another area is one line.
 
-> **Status:** v1 — runs locally. See [`SPEC.md`](./SPEC.md) for the full design, data
-> sources, and decisions. Hosting + an access gate are a planned V2.
+Storage is **libSQL** (`@libsql/client`): a local file in dev, and a hosted
+[Turso](https://turso.tech) database in production — the same code and SQL run in both.
+
+> **Status:** v1 runs locally; the storage layer is ready for the Vercel deployment
+> (see [`SPEC.md`](./SPEC.md) §9). An env-managed password gate ships with the hosted build.
 
 ## What you get
 
-A sortable, filterable table of every route in the area with its basic info (grade, type,
-pitches, length, stars) **plus** three recency columns computed from tick data:
+A sortable, filterable, **tabbed** table (one tab per area) of every route with its basic
+info (grade, type, pitches, length, stars) **plus** three recency columns computed from
+tick data:
 
 | Column | Meaning |
 |---|---|
@@ -32,28 +36,30 @@ climber, and their comment — the conditions/beta you actually want before driv
 
 ## Requirements
 
-- **Node.js ≥ 22.5** — uses the built-in `node:sqlite` and global `fetch`. **No `npm install`,
-  no native modules, no API keys.**
+- **Node.js ≥ 22.5** (global `fetch`) and one dependency, the libSQL client.
+
+```bash
+npm install
+```
 
 ## Quickstart
 
 ```bash
-npm run crawl     # fetch catalog + newest ticks into data/catalog.sqlite (~2 min)
-npm run serve     # serve the table at http://localhost:4173
+npm run crawl     # crawl every configured area into data/catalog.sqlite (~3-4 min)
+npm run serve     # serve the tabbed table at http://localhost:4173
 ```
 
 Run `crawl` once a day (cron / launchd) to keep the recency columns fresh. Tick IDs are
 stable, so re-running only adds new ticks — history accumulates and the first run does the
 heavy lifting; later runs are quick.
 
-Point it at a different area:
+**Add an area:** append to the `AREAS` list in `src/config.js` — the crawler and the UI
+tabs pick it up automatically. Each entry is `{ id, name, slug }` where `id` is the MP area
+id from the area URL.
 
-```bash
-AREA_ID=105720495 AREA_NAME="Smith Rock" npm run crawl
-```
-
-Other env knobs (see `src/config.js`): `THROTTLE_MS`, `PER_PAGE`, `DB_PATH`, `PORT`,
-`RECENT_TICKS`.
+Env knobs (see `src/config.js`): `THROTTLE_MS`, `PER_PAGE`, `PORT`, `RECENT_TICKS`, and
+`TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` (point storage at a hosted Turso DB instead of the
+local file).
 
 ## How it works
 
@@ -66,21 +72,22 @@ HTML:
    paginated JSON API. Each tick has a **stable id** (used for dedup), a climbed date, a
    submission timestamp, style fields, the comment text, and the climber.
 
-The crawler is deliberately light and polite: ~266 requests once a day, throttled, with an
-identifying User-Agent and retry/backoff. Data lands in a local SQLite file; the recency
-columns are plain SQL queries over the stored ticks (so "this month", trends, etc. are easy
-to add later with no schema change).
+The crawler is deliberately light and polite: it iterates the configured areas (one CSV
+request each) plus one tick request per route, once a day, throttled, with an identifying
+User-Agent and retry/backoff. Writes are batched per route so it stays efficient against a
+remote (Turso) database too. The recency columns are plain SQL queries over the stored
+ticks (so "this month", trends, etc. are easy to add later with no schema change).
 
 ## Project layout
 
 ```
-src/config.js   area + crawl settings (env-overridable)
+src/config.js   areas list + crawl/storage settings (env-overridable)
 src/mp.js       Mountain Project HTTP client (throttle, retries/backoff)
 src/csv.js      CSV parser for the catalog export
-src/db.js       node:sqlite schema + connection
-src/crawl.js    ingest job: catalog sync + tick ingest (dedup on tick id)
+src/db.js       libSQL client + schema/migrations
+src/crawl.js    runCrawl(): per-area catalog sync + tick ingest (dedup on tick id)
 src/metrics.js  read queries for the UI
-src/render.js   HTML page (client-side sort/filter/expand)
+src/render.js   tabbed HTML page (client-side area tabs / sort / filter / expand)
 src/server.js   local web server
 SPEC.md         full design, data sources, schema, decisions, roadmap
 ```

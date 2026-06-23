@@ -1,8 +1,11 @@
-// Daily ingest job: (1) sync the route catalog from the CSV export, then
-// (2) fetch the newest page of ticks per route and upsert (dedup on MP tick id).
-// Run with: npm run crawl
+// Ingest job: for each configured area, sync the route catalog from the CSV
+// export, then fetch the newest page of ticks per route and upsert (deduped on
+// MP tick id). Exposed as runCrawl() so both the CLI (npm run crawl) and the
+// Vercel /api/crawl function can call it. Writes are batched per route to keep
+// round-trips low against a remote (Turso) database.
+import { pathToFileURL } from 'node:url';
 import { config } from './config.js';
-import { openDb } from './db.js';
+import { getClient, migrate } from './db.js';
 import { fetchCatalogCsv, fetchTicksPage } from './mp.js';
 import { parseCsvToObjects } from './csv.js';
 import {
@@ -15,127 +18,157 @@ const routeIdFromUrl = (url) => {
   return m ? Number(m[1]) : null;
 };
 
-async function syncCatalog(db) {
-  const csv = await fetchCatalogCsv();
+const UPSERT_ROUTE = `
+  INSERT INTO routes (mp_id, area_id, name, location, url, avg_stars, route_type,
+                      rating, pitches, length_ft, area_lat, area_lng, first_seen_at, last_seen_at, raw)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(mp_id) DO UPDATE SET
+    area_id=excluded.area_id, name=excluded.name, location=excluded.location, url=excluded.url,
+    avg_stars=excluded.avg_stars, route_type=excluded.route_type, rating=excluded.rating,
+    pitches=excluded.pitches, length_ft=excluded.length_ft, area_lat=excluded.area_lat,
+    area_lng=excluded.area_lng, last_seen_at=excluded.last_seen_at, raw=excluded.raw`;
+
+const INSERT_TICK = `
+  INSERT INTO ticks (id, route_mp_id, climbed_date, submitted_at, src_updated_at,
+                     style, lead_style, pitches, text, comment, user_id, user_name, observed_at, raw)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
+
+const UPDATE_TICK = `
+  UPDATE ticks SET climbed_date=?, submitted_at=?, src_updated_at=?, style=?, lead_style=?,
+                   pitches=?, text=?, comment=?, user_id=?, user_name=?, raw=? WHERE id=?`;
+
+async function syncCatalog(client, area) {
+  const csv = await fetchCatalogCsv(area.id);
   const rows = parseCsvToObjects(csv);
   const now = nowIso();
-
-  const upsert = db.prepare(`
-    INSERT INTO routes (mp_id, area_id, name, location, url, avg_stars, route_type,
-                        rating, pitches, length_ft, area_lat, area_lng, first_seen_at, last_seen_at, raw)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(mp_id) DO UPDATE SET
-      area_id=excluded.area_id, name=excluded.name, location=excluded.location, url=excluded.url,
-      avg_stars=excluded.avg_stars, route_type=excluded.route_type, rating=excluded.rating,
-      pitches=excluded.pitches, length_ft=excluded.length_ft, area_lat=excluded.area_lat,
-      area_lng=excluded.area_lng, last_seen_at=excluded.last_seen_at, raw=excluded.raw
-  `);
-
+  const areaId = Number(area.id);
+  const stmts = [];
   const routes = [];
   for (const r of rows) {
     const mpId = routeIdFromUrl(r.URL);
     if (!mpId) continue;
-    upsert.run(
-      mpId, Number(config.areaId), r.Route || '(unnamed)', orNull(r.Location), r.URL,
-      floatOrNull(r['Avg Stars']), orNull(r['Route Type']), orNull(r.Rating),
-      intOrNull(r.Pitches), intOrNull(r.Length), floatOrNull(r['Area Latitude']),
-      floatOrNull(r['Area Longitude']), now, now, JSON.stringify(r),
-    );
+    stmts.push({
+      sql: UPSERT_ROUTE,
+      args: [
+        mpId, areaId, r.Route || '(unnamed)', orNull(r.Location), r.URL,
+        floatOrNull(r['Avg Stars']), orNull(r['Route Type']), orNull(r.Rating),
+        intOrNull(r.Pitches), intOrNull(r.Length), floatOrNull(r['Area Latitude']),
+        floatOrNull(r['Area Longitude']), now, now, JSON.stringify(r),
+      ],
+    });
     routes.push({ mpId, name: r.Route });
   }
+  if (stmts.length) await client.batch(stmts, 'write');
   return routes;
 }
 
-async function ingestTicksForRoute(db, route, counters) {
-  const existing = db.prepare('SELECT src_updated_at FROM ticks WHERE id = ?');
-  const insert = db.prepare(`
-    INSERT INTO ticks (id, route_mp_id, climbed_date, submitted_at, src_updated_at,
-                       style, lead_style, pitches, text, comment, user_id, user_name, observed_at, raw)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-  const update = db.prepare(`
-    UPDATE ticks SET climbed_date=?, submitted_at=?, src_updated_at=?, style=?, lead_style=?,
-                     pitches=?, text=?, comment=?, user_id=?, user_name=?, raw=? WHERE id=?
-  `);
+function tickFields(t) {
+  const style = orNull(t.style) || null;
+  const leadStyle = orNull(t.leadStyle) || null;
+  const text = cleanTickText(t.text);
+  const comment = deriveComment(text, style, leadStyle);
+  const user = t.user && typeof t.user === 'object' ? t.user : null;
+  return {
+    id: intOrNull(t.id),
+    climbed: parseClimbedDate(t.date),
+    submitted: orNull(t.createdAt) || null,
+    updated: orNull(t.updatedAt) || null,
+    style, leadStyle,
+    pitches: intOrNull(t.pitches),
+    text, comment,
+    userId: user ? intOrNull(user.id) : null,
+    userName: user ? (orNull(user.name) || null) : null,
+    raw: JSON.stringify(t),
+  };
+}
 
+async function ingestTicksForRoute(client, route, counters) {
   // v1: only page 1 (newest 250) — covers far more than the windows we report.
   const payload = await fetchTicksPage(route.mpId, 1);
   const ticks = Array.isArray(payload?.data) ? payload.data : [];
   const now = nowIso();
 
-  for (const t of ticks) {
-    const style = orNull(t.style) || null;
-    const leadStyle = orNull(t.leadStyle) || null;
-    const text = cleanTickText(t.text);
-    const comment = deriveComment(text, style, leadStyle);
-    const user = t.user && typeof t.user === 'object' ? t.user : null;
-    const fields = [
-      parseClimbedDate(t.date), orNull(t.createdAt), orNull(t.updatedAt),
-      style, leadStyle, intOrNull(t.pitches), text, comment,
-      user ? intOrNull(user.id) : null, user ? orNull(user.name) : null,
-    ];
+  const ex = await client.execute({
+    sql: 'SELECT id, src_updated_at FROM ticks WHERE route_mp_id = ?',
+    args: [route.mpId],
+  });
+  const seen = new Map(ex.rows.map((r) => [Number(r.id), r.src_updated_at]));
 
-    const row = existing.get(t.id);
-    if (!row) {
-      insert.run(intOrNull(t.id), route.mpId, ...fields, now, JSON.stringify(t));
-      counters.inserted++;
-    } else if (row.src_updated_at !== orNull(t.updatedAt)) {
-      update.run(...fields, JSON.stringify(t), intOrNull(t.id));
-      counters.updated++;
+  const stmts = [];
+  let ins = 0, upd = 0;
+  for (const t of ticks) {
+    const f = tickFields(t);
+    if (f.id == null) continue;
+    if (!seen.has(f.id)) {
+      stmts.push({ sql: INSERT_TICK, args: [
+        f.id, route.mpId, f.climbed, f.submitted, f.updated, f.style, f.leadStyle,
+        f.pitches, f.text, f.comment, f.userId, f.userName, now, f.raw] });
+      ins++;
+    } else if (seen.get(f.id) !== f.updated) {
+      stmts.push({ sql: UPDATE_TICK, args: [
+        f.climbed, f.submitted, f.updated, f.style, f.leadStyle, f.pitches,
+        f.text, f.comment, f.userId, f.userName, f.raw, f.id] });
+      upd++;
     }
   }
-  return { total: payload?.total ?? null, fetched: ticks.length };
+  if (stmts.length) await client.batch(stmts, 'write');
+  counters.inserted += ins;
+  counters.updated += upd;
+  return { total: payload?.total ?? null };
 }
 
-async function main() {
-  const db = openDb(config.dbPath);
-  const run = db.prepare('INSERT INTO crawl_runs (started_at) VALUES (?)').run(nowIso());
-  const runId = run.lastInsertRowid;
+export async function runCrawl({ log = () => {} } = {}) {
+  const client = getClient();
+  await migrate(client);
+  const ins = await client.execute({ sql: 'INSERT INTO crawl_runs (started_at) VALUES (?)', args: [nowIso()] });
+  const runId = Number(ins.lastInsertRowid);
   const counters = { inserted: 0, updated: 0 };
   const errors = [];
+  let routesSeen = 0;
 
-  console.log(`[crawl] area ${config.areaId} (${config.areaName}) -> ${config.dbPath}`);
-
-  let routes = [];
-  try {
-    routes = await syncCatalog(db);
-    console.log(`[crawl] catalog: ${routes.length} routes`);
-  } catch (err) {
-    db.prepare('UPDATE crawl_runs SET finished_at=?, status=?, errors=? WHERE id=?')
-      .run(nowIso(), 'failed', JSON.stringify([{ stage: 'catalog', error: String(err) }]), runId);
-    console.error('[crawl] catalog fetch failed:', err);
-    process.exitCode = 1;
-    return;
-  }
-
-  const setTotal = db.prepare('UPDATE routes SET tick_total = ? WHERE mp_id = ?');
-  for (let i = 0; i < routes.length; i++) {
-    const route = routes[i];
+  for (const area of config.areas) {
+    let routes;
     try {
-      const { total } = await ingestTicksForRoute(db, route, counters);
-      // The API's `total` is the authoritative all-time count; persist it so the
-      // UI's "All-time" column isn't limited to the page-1 sample we store.
-      if (total != null) setTotal.run(total, route.mpId);
-      if ((i + 1) % 20 === 0 || i === routes.length - 1) {
-        console.log(`[crawl] ticks ${i + 1}/${routes.length} (last: ${route.name}, all-time ${total ?? '?'})`);
-      }
+      routes = await syncCatalog(client, area);
+      log(`[crawl] ${area.name}: ${routes.length} routes`);
     } catch (err) {
-      errors.push({ route: route.mpId, name: route.name, error: String(err) });
-      console.warn(`[crawl] route ${route.mpId} (${route.name}) failed: ${err}`);
+      errors.push({ stage: 'catalog', area: area.id, error: String(err) });
+      log(`[crawl] ${area.name}: catalog failed — ${err}`);
+      continue;
+    }
+    routesSeen += routes.length;
+    for (let i = 0; i < routes.length; i++) {
+      const route = routes[i];
+      try {
+        const { total } = await ingestTicksForRoute(client, route, counters);
+        if (total != null) {
+          await client.execute({ sql: 'UPDATE routes SET tick_total=? WHERE mp_id=?', args: [total, route.mpId] });
+        }
+      } catch (err) {
+        errors.push({ area: area.id, route: route.mpId, name: route.name, error: String(err) });
+      }
+      if ((i + 1) % 40 === 0 || i === routes.length - 1) {
+        log(`[crawl] ${area.name}: ticks ${i + 1}/${routes.length}`);
+      }
     }
   }
 
   const status = errors.length === 0 ? 'ok' : 'partial';
-  db.prepare(`UPDATE crawl_runs SET finished_at=?, status=?, routes_seen=?, ticks_inserted=?,
-              ticks_updated=?, errors=? WHERE id=?`)
-    .run(nowIso(), status, routes.length, counters.inserted, counters.updated,
-         errors.length ? JSON.stringify(errors) : null, runId);
-
-  console.log(`[crawl] done: ${status} — ${counters.inserted} new ticks, ${counters.updated} updated, ${errors.length} route errors`);
-  db.close();
+  await client.execute({
+    sql: `UPDATE crawl_runs SET finished_at=?, status=?, routes_seen=?, ticks_inserted=?,
+          ticks_updated=?, errors=? WHERE id=?`,
+    args: [nowIso(), status, routesSeen, counters.inserted, counters.updated,
+           errors.length ? JSON.stringify(errors) : null, runId],
+  });
+  const summary = { status, routesSeen, inserted: counters.inserted, updated: counters.updated, errors: errors.length };
+  log(`[crawl] done: ${status} — ${counters.inserted} new, ${counters.updated} updated, ${errors.length} errors`);
+  return summary;
 }
 
-main().catch((err) => {
-  console.error('[crawl] fatal:', err);
-  process.exitCode = 1;
-});
+// CLI entry: node src/crawl.js
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runCrawl({ log: console.log }).catch((err) => {
+    console.error('[crawl] fatal:', err);
+    process.exitCode = 1;
+  });
+}
