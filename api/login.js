@@ -1,5 +1,6 @@
 // Vercel Function: the password gate's login page (GET) + form handler (POST).
 // Reachable at /login via the rewrite in vercel.json. Excluded from the gate.
+// No-framework functions use a default `fetch` export (branch on request.method).
 import { authCookie } from '../src/auth.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -34,19 +35,20 @@ const htmlResponse = (body, status = 200) =>
 
 const safeNext = (raw) => (raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/');
 
-export async function GET(request) {
-  const next = safeNext(new URL(request.url).searchParams.get('next'));
-  return htmlResponse(loginPage({ next }));
-}
+export default {
+  async fetch(request) {
+    const next = safeNext(new URL(request.url).searchParams.get('next'));
 
-export async function POST(request) {
-  const password = process.env.SITE_PASSWORD || '';
-  const next = safeNext(new URL(request.url).searchParams.get('next'));
-  const form = await request.formData();
-  const entered = String(form.get('password') || '');
+    if (request.method === 'POST') {
+      const password = process.env.SITE_PASSWORD || '';
+      const form = await request.formData();
+      const entered = String(form.get('password') || '');
+      if (password && entered === password) {
+        return new Response(null, { status: 302, headers: { Location: next, 'Set-Cookie': authCookie(password) } });
+      }
+      return htmlResponse(loginPage({ next, error: 'Incorrect password' }), 401);
+    }
 
-  if (password && entered === password) {
-    return new Response(null, { status: 302, headers: { Location: next, 'Set-Cookie': authCookie(password) } });
-  }
-  return htmlResponse(loginPage({ next, error: 'Incorrect password' }), 401);
-}
+    return htmlResponse(loginPage({ next }));
+  },
+};
