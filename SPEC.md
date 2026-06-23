@@ -1,7 +1,9 @@
 # Mountain Project Tick Catalog — Spec
 
-> Status: **v1 implemented** — working local app in this repo (see `README.md` and `src/`).
-> Last updated: 2026-06-22.
+> Status: **v1 + V2 build** — working app in this repo. Multi-area (Cathedral + Whitehorse)
+> with tabs; storage on libSQL/Turso; a lean Vercel deployment (functions + cron) with an
+> env-managed password gate. See `README.md` (incl. the Deploy section) and `src/` + `api/`.
+> Last updated: 2026-06-23.
 > Personal-use, access-gated catalog of climbing routes for a configurable Mountain
 > Project (MP) area, augmented with "recently climbed" signals derived from tick data.
 
