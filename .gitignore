@@ -4,3 +4,7 @@ data/
 *.sqlite-*
 *.db
 .DS_Store
+.env
+.env.*
+!.env.example
+.vercel

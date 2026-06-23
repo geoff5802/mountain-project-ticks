@@ -12,6 +12,7 @@
     "serve": "node --disable-warning=ExperimentalWarning src/server.js"
   },
   "dependencies": {
-    "@libsql/client": "^0.17.4"
+    "@libsql/client": "^0.17.4",
+    "@vercel/functions": "^3.7.3"
   }
 }

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/crawl", "schedule": "0 9 * * *" }
+  ],
+  "rewrites": [
+    { "source": "/", "destination": "/api/index" },
+    { "source": "/login", "destination": "/api/login" }
+  ],
+  "functions": {
+    "api/crawl.js": { "maxDuration": 300 }
+  }
+}

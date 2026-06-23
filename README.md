@@ -88,7 +88,13 @@ src/db.js       libSQL client + schema/migrations
 src/crawl.js    runCrawl(): per-area catalog sync + tick ingest (dedup on tick id)
 src/metrics.js  read queries for the UI
 src/render.js   tabbed HTML page (client-side area tabs / sort / filter / expand)
-src/server.js   local web server
+src/server.js   local dev web server (no auth)
+src/auth.js     password-gate helpers (HMAC cookie)
+middleware.js   Vercel Routing Middleware — the password gate
+api/index.js    Vercel Function — serves the catalog page ("/")
+api/login.js    Vercel Function — login page + form handler ("/login")
+api/crawl.js    Vercel Function — daily crawl, run by Vercel Cron
+vercel.json     cron schedule + rewrites + function maxDuration
 SPEC.md         full design, data sources, schema, decisions, roadmap
 ```
 
@@ -102,8 +108,37 @@ SPEC.md         full design, data sources, schema, decisions, roadmap
   itself, throttles, and runs at most once daily. Tick comments are user-authored — the UI
   attributes and links back to Mountain Project. Don't redistribute the data publicly.
 
-## Roadmap (V2)
+## Deploy to Vercel (Turso + password gate)
 
-- Hosting + a simple access gate
+The hosted build is lean: three Vercel Functions + Routing Middleware + a daily cron, all
+reusing the `src/` modules. See `.env.example` for the variables.
+
+1. **Create a Turso database** and grab its URL + token:
+   ```bash
+   turso db create mountain-ticks
+   turso db show mountain-ticks --url      # -> TURSO_DATABASE_URL
+   turso db tokens create mountain-ticks   # -> TURSO_AUTH_TOKEN
+   ```
+2. **Seed it once, from your machine** (avoids the function time limit on the big first
+   crawl):
+   ```bash
+   TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… npm run crawl
+   ```
+3. **Link & deploy** with the Vercel CLI (`vercel`), then set env vars in the project:
+   `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `SITE_PASSWORD`, `CRON_SECRET`.
+4. **Deploy to production** (`vercel --prod`). Vercel registers the cron from `vercel.json`
+   (daily 09:00 UTC → `/api/crawl`) and sends it `Authorization: Bearer $CRON_SECRET`.
+
+**Password gate:** active whenever `SITE_PASSWORD` is set — visitors get a sign-in page; a
+correct password sets a signed cookie. Change the password anytime by editing the env var in
+the Vercel dashboard (no code change). Unset = open (handy for local/preview). Local
+`npm run serve` is unauthenticated by design; use `vercel dev` to exercise the full gated
+flow locally.
+
+> Steady-state: the daily cron re-checks every route (~1 request each) and fits the 300s
+> function limit. If you add many more areas, split the cron per area or move to a queue.
+
+## Roadmap
+
 - Optional full tick-history backfill
-- Multiple areas at once; trend charts over time
+- Trend charts over time; richer per-route history
