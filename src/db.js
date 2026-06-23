@@ -1,7 +1,8 @@
-// SQLite storage via Node's built-in node:sqlite (no native deps).
-import { DatabaseSync } from 'node:sqlite';
+// Storage via libSQL (@libsql/client): a local file URL in dev, a Turso
+// libsql:// URL in production — same client, same SQL.
+import { createClient } from '@libsql/client';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { config } from './config.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS routes (
@@ -22,7 +23,6 @@ CREATE TABLE IF NOT EXISTS routes (
   last_seen_at  TEXT    NOT NULL,
   raw           TEXT
 );
-
 CREATE TABLE IF NOT EXISTS ticks (
   id             INTEGER PRIMARY KEY,
   route_mp_id    INTEGER NOT NULL,
@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS ticks (
 );
 CREATE INDEX IF NOT EXISTS ticks_route_climbed_idx ON ticks (route_mp_id, climbed_date DESC);
 CREATE INDEX IF NOT EXISTS ticks_submitted_idx     ON ticks (submitted_at DESC);
-
 CREATE TABLE IF NOT EXISTS crawl_runs (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at     TEXT NOT NULL,
@@ -54,16 +53,24 @@ CREATE TABLE IF NOT EXISTS crawl_runs (
 );
 `;
 
-export function openDb(dbPath) {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA busy_timeout = 5000;');
-  db.exec(SCHEMA);
-  // Lightweight migration: add tick_total to DBs created before it existed.
-  const routeCols = db.prepare('PRAGMA table_info(routes)').all().map((c) => c.name);
-  if (!routeCols.includes('tick_total')) {
-    db.exec('ALTER TABLE routes ADD COLUMN tick_total INTEGER');
+let _client;
+
+export function getClient() {
+  if (!_client) {
+    // Ensure the parent dir exists for local file: URLs.
+    const m = config.dbUrl.match(/^file:(.+)$/);
+    if (m) mkdirSync(m[1].replace(/[^/]+$/, ''), { recursive: true });
+    _client = createClient({ url: config.dbUrl, authToken: config.dbAuthToken });
   }
-  return db;
+  return _client;
+}
+
+export async function migrate(client = getClient()) {
+  await client.executeMultiple(SCHEMA);
+  // Back-fill the tick_total column on DBs created before it existed.
+  const cols = await client.execute('PRAGMA table_info(routes)');
+  if (!cols.rows.some((r) => r.name === 'tick_total')) {
+    await client.execute('ALTER TABLE routes ADD COLUMN tick_total INTEGER');
+  }
+  return client;
 }

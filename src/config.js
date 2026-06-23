@@ -1,20 +1,23 @@
-// Central config. Everything here is overridable by environment variable so the
-// target area can be swapped without code changes (e.g. AREA_ID=... npm run crawl).
+// Central config. Areas are listed here; the crawler and UI pick them up
+// automatically, so adding an area is a one-line change. Everything is
+// env-overridable so the same code runs locally and on Vercel.
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
-
 const env = process.env;
 
-export const config = {
-  // Mountain Project area to catalog. Cathedral Ledge by default.
-  areaId: env.AREA_ID || '105908823',
-  areaName: env.AREA_NAME || 'Cathedral Ledge',
+// Mountain Project areas to catalog. Add more objects here to expand coverage.
+export const AREAS = [
+  { id: '105908823', name: 'Cathedral Ledge', slug: 'cathedral' },
+  { id: '105909079', name: 'Whitehorse Ledge', slug: 'whitehorse' },
+];
 
-  // route-finder-export query params (the catalog source). Mirrors the route-finder
-  // UI filters; defaults are wide-open for rock routes so we get every route.
+export const config = {
+  areas: AREAS,
+
+  // route-finder-export filters (shared across areas); wide-open for rock routes.
   finderParams: {
     type: 'rock',
     diffMinrock: '800',
@@ -28,17 +31,23 @@ export const config = {
   // Politeness / robustness for the crawler.
   userAgent:
     env.MP_USER_AGENT ||
-    'mountain-tick-catalog/0.1 (personal, low-volume daily catalog; contact: local user)',
-  throttleMs: Number(env.THROTTLE_MS || 400), // min gap between requests
+    'mountain-tick-catalog/0.2 (personal, low-volume daily catalog; contact: local user)',
+  throttleMs: Number(env.THROTTLE_MS || 400),
   maxRetries: Number(env.MAX_RETRIES || 4),
-  perPage: Number(env.PER_PAGE || 250), // tick API page size
+  perPage: Number(env.PER_PAGE || 250),
 
-  // Local storage + server.
-  dbPath: env.DB_PATH || join(repoRoot, 'data', 'catalog.sqlite'),
+  // Storage: libSQL/Turso. Local default is a file; on Vercel set TURSO_DATABASE_URL
+  // (libsql://…) + TURSO_AUTH_TOKEN.
+  dbUrl: env.TURSO_DATABASE_URL || env.DATABASE_URL || `file:${join(repoRoot, 'data', 'catalog.sqlite')}`,
+  dbAuthToken: env.TURSO_AUTH_TOKEN || env.DATABASE_AUTH_TOKEN || undefined,
+
+  // Local dev server.
   port: Number(env.PORT || 4173),
-
-  // How many most-recent ticks to show in a route's expanded detail panel.
   recentTicksPerRoute: Number(env.RECENT_TICKS || 25),
+
+  // Secrets used by the hosted deployment (ignored locally).
+  sitePassword: env.SITE_PASSWORD || '', // password gate (managed in env)
+  cronSecret: env.CRON_SECRET || '',      // protects the /api/crawl endpoint
 };
 
 export const MP_BASE = 'https://www.mountainproject.com';
