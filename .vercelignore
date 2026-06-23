@@ -1,9 +1,6 @@
-# src/server.js is the LOCAL dev server (npm run serve). Exclude it from the
-# Vercel deployment so Vercel uses the api/* functions + middleware.js model
-# instead of auto-detecting it as a Node server entrypoint.
-src/server.js
-
-# Local-only artifacts (prod uses Turso, not the local SQLite file).
+# Local-only artifacts — not needed in the deployment (prod uses Turso, not the
+# local SQLite file). src/server.js is intentionally NOT ignored: Vercel runs it
+# as the Node server entrypoint.
 data/
 node_modules/
 .env

@@ -88,15 +88,17 @@ src/db.js       libSQL client + schema/migrations
 src/crawl.js    runCrawl(): per-area catalog sync + tick ingest (dedup on tick id)
 src/metrics.js  read queries for the UI
 src/render.js   tabbed HTML page (client-side area tabs / sort / filter / expand)
-src/server.js   local dev web server (no auth)
 src/auth.js     password-gate helpers (HMAC cookie)
-middleware.js   Vercel Routing Middleware — the password gate
-api/index.js    Vercel Function — serves the catalog page ("/")
-api/login.js    Vercel Function — login page + form handler ("/login")
-api/crawl.js    Vercel Function — daily crawl, run by Vercel Cron
-vercel.json     cron schedule + rewrites + function maxDuration
+src/server.js   the web server — used for BOTH local dev and the Vercel deployment;
+                handles every route (catalog, /login gate, /api/crawl) with the gate inline
+vercel.json     daily cron schedule
 SPEC.md         full design, data sources, schema, decisions, roadmap
 ```
+
+The deployment is a **single Node server** (`src/server.js`), which Vercel runs as the
+project's entrypoint — the same file you run locally with `npm run serve`. The password gate
+is enforced inside it (active only when `SITE_PASSWORD` is set), and the daily cron hits the
+server's `/api/crawl` route.
 
 ## Data notes & etiquette
 
@@ -110,8 +112,8 @@ SPEC.md         full design, data sources, schema, decisions, roadmap
 
 ## Deploy to Vercel (Turso + password gate)
 
-The hosted build is lean: three Vercel Functions + Routing Middleware + a daily cron, all
-reusing the `src/` modules. See `.env.example` for the variables.
+The hosted build is lean: Vercel runs `src/server.js` as the Node server entrypoint, plus a
+daily cron. See `.env.example` for the variables.
 
 1. **Create a Turso database** and grab its URL + token:
    ```bash
